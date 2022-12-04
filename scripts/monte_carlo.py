@@ -14,6 +14,7 @@ integrand, i.e. the variance of the expectation value of the function and not th
 function itself where the former is the latter divided by the square root of N, the
 number of events.
 """
+
 from typing import Any, Dict, Optional, Union
 
 import numpy as np
@@ -21,7 +22,6 @@ from scipy.special import erfinv
 from sympy import lambdify, sympify
 from vegas import Integrator, RAvgArray, batchintegrand
 
-# TODO: switch from numpy array to numba python loop (to reduce memory usage)
 
 # Various PDFs and inverse CDFs for `MCd`
 inv_cdfs = {
@@ -71,7 +71,7 @@ def var(func: str, expval: Optional[float] = None, N: int = int(1e4)) -> float:
     if expval is None:
         expval = MC(func, N=N, use_vegas=True)[0]
 
-    return MC(str(sympify(func) ** 2), N=N, use_vegas=True)[0] - expval ** 2
+    return MC(str(sympify(func) ** 2), N=N, use_vegas=True)[0] - expval**2
 
 
 def cov(
@@ -162,7 +162,7 @@ def MC(
             return result[0].mean, result[0].sdev ** 2
 
         # Return mean and variance
-        return result.mean, result.sdev ** 2
+        return result.mean, result.sdev**2
 
     # Or use my simple version:
     # Otherwise calculate the y's from uniform random x's
@@ -170,29 +170,11 @@ def MC(
     xs = np.random.uniform(a, b, N)
     ys = func_lmbda(xs)
     ys_tot = ys.sum()
-    ys_sq_tot = (ys ** 2).sum()
+    ys_sq_tot = (ys**2).sum()
     expval = (b - a) * ys_tot / N
     expval2 = (b - a) * ys_sq_tot / N
 
-    return expval, (expval2 - expval ** 2) / N
-
-
-def find_opt_coeff(
-    func: str, cvfunc: str, soln: float = None, N: int = int(1e6),
-) -> float:
-    """
-    Find the coefficient to minimize variance using control variate method.
-
-    Parameters:
-    func - function of MC integration
-    cvfunc - control variate function whose expected value (integration value) is known
-    soln (default None) - the expected value of `cvfunc`
-    N (default int(1e6)) - number of MC events
-
-    Returns:
-    optimized coefficent value
-    """
-    return -cov(func, cvfunc, expval2=soln, N=N) / var(cvfunc, soln, N)
+    return expval, (expval2 - expval**2) / N
 
 
 def MCcv(
@@ -226,7 +208,7 @@ def MCcv(
     """
     # find optimal coefficient as -Cov(func, cvfunc)^2/Var(cvfunc)
     if coeff is None:
-        coeff = find_opt_coeff(func, cvfunc, soln, N=cN)
+        coeff = -cov(func, cvfunc, expval2=soln, N=cN) / var(cvfunc, soln, cN)
         if printc:
             print(f"Using optimized coeffient: c = {coeff:.5f}")
 
@@ -238,7 +220,10 @@ def MCcv(
 
 
 def MCav(
-    func: str, N: int = int(1e6), use_vegas: bool = True, vkwargs: Dict[str, Any] = {},
+    func: str,
+    N: int = int(1e6),
+    use_vegas: bool = True,
+    vkwargs: Dict[str, Any] = {},
 ) -> tuple[float, float]:
     """
     1D MC integration of nonnegative function over [0,1] assuming uniform distribution
@@ -259,155 +244,6 @@ def MCav(
     totfunc = str((sympify(func) + sympify(antfunc)) / 2)
 
     return MC(totfunc, N=N, use_vegas=use_vegas, vkwargs=vkwargs)
-
-
-def find_opt_coeffs(f1, g1, soln1, soln2, N=int(1e6)):
-    """
-    Test find the two optimal coefficients
-    """
-    # antithetic functions
-    f2 = str(sympify(f1.replace("x", "(1 - x)")))
-    g2 = str(sympify(g1.replace("x", "(1 - x)")))
-
-    def make_lambda(func_str):
-        func_lmbda = lambdify("x", str(sympify(func_str)))
-        if sympify(func_str).is_constant:
-            # need to vectorize function if it is constant,
-            # otherwise returns float, not array of floats
-            return np.vectorize(func_lmbda)
-        return func_lmbda
-
-    # Create lambda function for every combination possible
-    f1_lmbda = make_lambda(f1)
-    f2_lmbda = make_lambda(f2)
-    gg11_lmbda = make_lambda(f"{g1}**2")
-    gg22_lmbda = make_lambda(f"{g2}**2")
-    gg12_lmbda = make_lambda(f"{g1} * {g2}")
-    fg11_lmbda = make_lambda(f"{f1} * {g1}")
-    fg12_lmbda = make_lambda(f"{f1} * {g2}")
-    fg21_lmbda = make_lambda(f"{f2} * {g1}")
-    fg22_lmbda = make_lambda(f"{f2} * {g2}")
-
-    # Get necessary expectation values
-    xs = np.random.uniform(size=N)
-    Eg1 = soln1
-    Eg2 = soln2
-    Ef1 = f1_lmbda(xs).sum() / N
-    Ef2 = f2_lmbda(xs).sum() / N
-    Egg11 = gg11_lmbda(xs).sum() / N
-    Egg22 = gg22_lmbda(xs).sum() / N
-    Egg12 = gg12_lmbda(xs).sum() / N
-    Efg11 = fg11_lmbda(xs).sum() / N
-    Efg12 = fg12_lmbda(xs).sum() / N
-    Efg21 = fg21_lmbda(xs).sum() / N
-    Efg22 = fg22_lmbda(xs).sum() / N
-
-    # Create variances/covariances used
-    varc1 = Egg11 - Eg1 ** 2
-    varc2 = Egg22 - Eg2 ** 2
-    covcc12 = Egg12 - Eg1 * Eg2
-    covfc11 = Efg11 - Ef1 * Eg1
-    covfc12 = Efg12 - Ef1 * Eg2
-    covfc21 = Efg21 - Ef2 * Eg1
-    covfc22 = Efg22 - Ef2 * Eg2
-
-    # Calculate the constants
-    det = varc1 * varc2 - covcc12 ** 2
-    c1 = (covcc12 * (covfc12 + covfc22) - varc2 * (covfc11 + covfc21)) / det
-    c2 = (covcc12 * (covfc11 + covfc21) - varc1 * (covfc12 + covfc22)) / det
-
-    return c1, c2
-
-
-def MCavcv(
-    func: str,
-    cvfunc: str,
-    solns: float,
-    coeffs: Optional[float] = None,
-    N: int = int(1e6),
-    cN: int = int(1e6),
-    printc: bool = True,
-    use_vegas: bool = False,
-    vkwargs: Dict[str, Any] = {},
-) -> tuple[float, float]:
-    """
-    Test AV on both with two coefficients
-    """
-    if coeffs is None:
-        coeffs = find_opt_coeffs(func, cvfunc, solns[0], solns[1], N=cN)
-        if printc:
-            print(
-                f"Using optimized coeffients: c1 = {coeffs[0]:.5f}, c2 = {coeffs[1]:.5f}"
-            )
-
-    antfunc = sympify(func.replace("x", "(1 - x)")) + coeffs[1] * (
-        sympify(cvfunc.replace("x", "(1 - x)")) - solns[1]
-    )
-    totfunc = (
-        ((sympify(func) + coeffs[0] * (sympify(cvfunc) - solns[0]) + antfunc) / 2)
-        .expand()
-        .simplify()
-    )
-
-    return MC(totfunc, N=N, use_vegas=use_vegas, vkwargs=vkwargs)
-
-
-def MCavcv1(
-    func: str,
-    cvfunc: str,
-    soln: float,
-    coeff: Optional[float] = None,
-    N: int = int(1e6),
-    cN: int = int(1e6),
-    printc: bool = True,
-    use_vegas: bool = False,
-) -> tuple[float, float]:
-    """Test of AV only on CV func"""
-    antfunc = str(sympify(func.replace("x", "(1-x)")))
-    totfunc = str(sympify(func) + sympify(antfunc))
-
-    # AV only on func
-    if coeff is None:
-        coeff = find_opt_coeff(totfunc, cvfunc, N=cN)
-        if printc:
-            print(f"Using optimized coeffients: c = {coeff:.5f}")
-
-    totfunc = str(
-        (sympify(totfunc) + coeff * (sympify(cvfunc) - soln)).expand().simplify()
-    )
-
-    return MC(totfunc, N=N, use_vegas=use_vegas)
-
-
-def MCavcv3(
-    func: str,
-    cvfunc: str,
-    solns: float,
-    coeff: Optional[float] = None,
-    N: int = int(1e6),
-    cN: int = int(1e6),
-    printc: bool = True,
-    use_vegas: bool = False,
-) -> tuple[float, float]:
-    """Test AV on both but with 1 coefficient"""
-    antfunc = str(sympify(func.replace("x", "(1-x)")))
-    antcvfunc = str(sympify(cvfunc.replace("x", "(1-x)")))
-    totfunc = str(sympify(func) + sympify(antfunc))
-    totcvfunc = str(sympify(cvfunc) + sympify(antcvfunc))
-
-    # AV on both, one coefficient
-    if coeff is None:
-        coeff = find_opt_coeff(totfunc, totcvfunc, N=cN)
-        if printc:
-            print(f"Using optimized coeffients: c = {coeff:.5f}")
-
-    totfunc = str(
-        (sympify(totfunc) + coeff * (sympify(totcvfunc) - np.sum(solns)))
-        .expand()
-        .simplify()
-    )
-
-    return MC(totfunc, N=N, use_vegas=use_vegas)
 
 
 def MCd(
@@ -433,7 +269,6 @@ def MCd(
     # values so no need to pass e.g. np.random.uniform(0, 1, N)
     ys = func(inv_cdfs["uniform" if dist is None else dist](**dist_kwargs, N=N))
     ys_avg = np.sum(ys) / N
-    ys_sq_avg = np.sum(ys ** 2) / N
+    ys_sq_avg = np.sum(ys**2) / N
 
-    return ys_avg, (ys_sq_avg - ys_avg ** 2) / N
-
+    return ys_avg, (ys_sq_avg - ys_avg**2) / N
